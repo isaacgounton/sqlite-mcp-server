@@ -343,17 +343,18 @@ class SQLiteServer {
 
       // Create event listener for this client
       const messageListener = (message: any) => {
-        console.log('Broadcasting message to client:', message);
+        // Only log non-test messages to avoid log spam
+        if (!message.type || message.type !== 'connection_test') {
+          console.log('Broadcasting message to client:', message);
+        }
         res.write(`data: ${JSON.stringify(message)}\n\n`);
       };
 
       // Register client
       this.eventEmitter.on('message', messageListener);
 
-      // Send a test message to verify the connection works
-      setTimeout(() => {
-        this.eventEmitter.emit('message', { type: 'connection_test', message: 'Testing SSE connection' });
-      }, 2000);
+      // We're removing the test message to avoid log spam
+      // Instead, only send a test message once when the server starts
 
       // Handle client disconnect
       req.on('close', () => {
@@ -407,6 +408,15 @@ class SQLiteServer {
       console.log('Express server running on port 3000');
       console.log('SSE endpoint available at http://localhost:3000/sse');
       console.log('Messages endpoint available at http://localhost:3000/messages');
+      
+      // Send a single test message when the server starts to verify everything is working
+      // This will only be logged once
+      setTimeout(() => {
+        this.eventEmitter.emit('message', { 
+          type: 'server_started', 
+          message: 'SQLite MCP server is ready to accept connections' 
+        });
+      }, 1000);
     });
   }
 }
