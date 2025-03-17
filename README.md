@@ -41,8 +41,8 @@ To connect using SSE in n8n:
 
 1. Add an MCP Client node
 2. Configure SSE connection:
-   - SSE URL: `http://localhost:3001/sse`
-   - Messages Post Endpoint: `http://localhost:3001/messages`
+   - SSE URL: `http://localhost:3000/sse`
+   - Messages Post Endpoint: `http://localhost:3000/messages`
    - No additional headers required
 
 ## Example Usage
