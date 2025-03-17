@@ -58,6 +58,19 @@ class SQLiteServer {
 
     // Initialize Express app
     this.app = express();
+    
+    // Add CORS headers to allow cross-origin requests
+    this.app.use((req: Request, res: Response, next) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+      } else {
+        next();
+      }
+    });
+    
     this.app.use(bodyParser.json());
     this.setupExpressHandlers();
 
@@ -317,6 +330,8 @@ class SQLiteServer {
 
     // Add SSE endpoint
     this.app.get('/sse', (req: Request, res: Response) => {
+      console.log('New SSE connection established');
+      
       // Set headers for SSE
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
@@ -328,15 +343,30 @@ class SQLiteServer {
 
       // Create event listener for this client
       const messageListener = (message: any) => {
+        console.log('Broadcasting message to client:', message);
         res.write(`data: ${JSON.stringify(message)}\n\n`);
       };
 
       // Register client
       this.eventEmitter.on('message', messageListener);
 
+      // Send a test message to verify the connection works
+      setTimeout(() => {
+        this.eventEmitter.emit('message', { type: 'connection_test', message: 'Testing SSE connection' });
+      }, 2000);
+
       // Handle client disconnect
       req.on('close', () => {
+        console.log('SSE connection closed');
         this.eventEmitter.off('message', messageListener);
+      });
+    });
+
+    // Add GET handler for messages endpoint
+    this.app.get('/messages', (req: Request, res: Response) => {
+      res.status(200).json({ 
+        message: 'This endpoint only accepts POST requests for MCP protocol messages',
+        usage: 'Send POST requests to this endpoint with JSON message body'
       });
     });
 
@@ -345,15 +375,16 @@ class SQLiteServer {
       try {
         const message = req.body;
         
+        // Log the request details
+        console.log('Received message POST:', JSON.stringify(message));
+        
         // Validate message format if needed
         if (!message) {
+          console.error('Invalid message format:', req.body);
           res.status(400).json({ error: 'Invalid message format' });
           return;
         }
 
-        // Process the message if needed
-        console.log('Received message:', message);
-        
         // Emit the message to all connected SSE clients
         this.eventEmitter.emit('message', message);
         
@@ -374,6 +405,8 @@ class SQLiteServer {
     // Start the Express server
     this.app.listen(3000, () => {
       console.log('Express server running on port 3000');
+      console.log('SSE endpoint available at http://localhost:3000/sse');
+      console.log('Messages endpoint available at http://localhost:3000/messages');
     });
   }
 }
