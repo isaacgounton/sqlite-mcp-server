@@ -1,0 +1,21 @@
+{
+  "name": "sqlite-mcp-server",
+  "version": "1.0.0",
+  "description": "SQLite MCP server for database operations",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js"
+  },
+  "keywords": ["mcp", "sqlite", "database"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.7.0",
+    "@types/sqlite3": "^3.1.11",
+    "sqlite3": "^5.1.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2"
+  }
+}
