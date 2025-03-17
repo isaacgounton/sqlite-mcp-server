@@ -26,6 +26,17 @@ docker build -t sqlite-mcp-server .
 docker run -d --name sqlite-mcp sqlite-mcp-server
 ```
 
+### Nixpacks Deployment
+
+The application can be easily deployed using Nixpacks with platforms like Railway, Coolify, or Render:
+
+```bash
+# Deploy with Nixpacks
+nixpacks build . --name sqlite-mcp-server
+```
+
+No additional configuration is needed as the project includes a Dockerfile.
+
 ## Available Tools
 
 1. `read_query`: Execute SELECT queries

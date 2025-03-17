@@ -13,6 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import sqlite3 from 'sqlite3';
 import { promisify } from 'util';
+import express, { Request, Response } from 'express';
 
 const PROMPT_TEMPLATE = `
 Oh, Hey there! I see you've chosen the topic {topic}. Let's get started! 🚀
@@ -29,6 +30,7 @@ class SQLiteServer {
   private server: Server;
   private db: sqlite3.Database;
   private insights: string[] = [];
+  private app: express.Application;
 
   constructor() {
     this.server = new Server(
@@ -50,6 +52,10 @@ class SQLiteServer {
     this.setupResourceHandlers();
     this.setupToolHandlers();
     this.setupPromptHandlers();
+
+    // Initialize Express app
+    this.app = express();
+    this.setupExpressHandlers();
 
     // Error handling
     this.server.onerror = (error) => console.error('[MCP Error]', error);
@@ -294,10 +300,27 @@ class SQLiteServer {
     });
   }
 
+  private setupExpressHandlers() {
+    // Add a health check endpoint
+    this.app.get('/health', (req: Request, res: Response) => {
+      res.status(200).send('OK');
+    });
+
+    // You may also want to add a root endpoint for the main health check
+    this.app.get('/', (req: Request, res: Response) => {
+      res.status(200).send('SQLite MCP Server is running');
+    });
+  }
+
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error('SQLite MCP server running on stdio');
+
+    // Start the Express server
+    this.app.listen(3000, () => {
+      console.log('Express server running on port 3000');
+    });
   }
 }
 
