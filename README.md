@@ -10,65 +10,20 @@ A Model Context Protocol (MCP) server that provides SQLite database operations t
 - Business insights memo tracking
 - Docker support for easy deployment
 
-## Installation
+## Development & Deployment
 
+### Local Development
 ```bash
+# Install dependencies and build
 npm install
-npm run build
-```
-
-## Development
-
-```bash
-# Build TypeScript
-npm run build
-
-# Start the server
 npm start
 ```
 
-## Docker Deployment
-
-Build the image:
+### Docker Deployment
 ```bash
+# Build and run with Docker
 docker build -t sqlite-mcp-server .
-```
-
-Run the container:
-```bash
-docker run -d --name sqlite-mcp sqlite-mcp-server
-```
-
-## Docker Compose with n8n
-
-Create a `docker-compose.yml`:
-
-```yaml
-version: '3'
-services:
-  sqlite-mcp:
-    image: sqlite-mcp-server
-    stdin_open: true
-    tty: true
-    volumes:
-      - sqlite_data:/data  # Optional: For persistent storage
-
-  n8n:
-    image: n8n/n8n
-    depends_on:
-      - sqlite-mcp
-    environment:
-      - N8N_EDITOR_BASE_URL=http://localhost:5678
-    ports:
-      - "5678:5678"
-
-volumes:
-  sqlite_data:
-```
-
-Run with:
-```bash
-docker-compose up -d
+docker run -p 3001:3001 -d --name sqlite-mcp sqlite-mcp-server
 ```
 
 ## Available Tools
@@ -82,12 +37,12 @@ docker-compose up -d
 
 ## Remote Server Connection
 
-The SQLite MCP server is hosted at `sqlite-mcpserver.etugrand.com`. To connect using SSE in n8n:
+To connect using SSE in n8n:
 
 1. Add an MCP Client node
 2. Configure SSE connection:
-   - SSE URL: `http://localhost:5678/sse`
-   - Messages Post Endpoint: `http://localhost:5678/messages`
+   - SSE URL: `http://localhost:3001/sse`
+   - Messages Post Endpoint: `http://localhost:3001/messages`
    - No additional headers required
 
 ## Example Usage
