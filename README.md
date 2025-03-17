@@ -80,6 +80,16 @@ docker-compose up -d
 5. `describe_table`: View schema information for a table
 6. `append_insight`: Add business insights to the memo
 
+## Remote Server Connection
+
+The SQLite MCP server is hosted at `sqlite-mcpserver.etugrand.com`. To connect using SSE in n8n:
+
+1. Add an MCP Client node
+2. Configure SSE connection:
+   - SSE URL: `http://localhost:5678/sse`
+   - Messages Post Endpoint: `http://localhost:5678/messages`
+   - No additional headers required
+
 ## Example Usage
 
 ```typescript
