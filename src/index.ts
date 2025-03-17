@@ -14,6 +14,8 @@ import {
 import sqlite3 from 'sqlite3';
 import { promisify } from 'util';
 import express, { Request, Response } from 'express';
+import bodyParser from 'body-parser';
+import { EventEmitter } from 'events';
 
 const PROMPT_TEMPLATE = `
 Oh, Hey there! I see you've chosen the topic {topic}. Let's get started! 🚀
@@ -31,6 +33,7 @@ class SQLiteServer {
   private db: sqlite3.Database;
   private insights: string[] = [];
   private app: express.Application;
+  private eventEmitter = new EventEmitter();
 
   constructor() {
     this.server = new Server(
@@ -55,6 +58,7 @@ class SQLiteServer {
 
     // Initialize Express app
     this.app = express();
+    this.app.use(bodyParser.json());
     this.setupExpressHandlers();
 
     // Error handling
@@ -309,6 +313,56 @@ class SQLiteServer {
     // You may also want to add a root endpoint for the main health check
     this.app.get('/', (req: Request, res: Response) => {
       res.status(200).send('SQLite MCP Server is running');
+    });
+
+    // Add SSE endpoint
+    this.app.get('/sse', (req: Request, res: Response) => {
+      // Set headers for SSE
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      // Send initial ping to establish connection
+      res.write('event: ping\ndata: connected\n\n');
+
+      // Create event listener for this client
+      const messageListener = (message: any) => {
+        res.write(`data: ${JSON.stringify(message)}\n\n`);
+      };
+
+      // Register client
+      this.eventEmitter.on('message', messageListener);
+
+      // Handle client disconnect
+      req.on('close', () => {
+        this.eventEmitter.off('message', messageListener);
+      });
+    });
+
+    // Add messages endpoint
+    this.app.post('/messages', (req: Request, res: Response) => {
+      try {
+        const message = req.body;
+        
+        // Validate message format if needed
+        if (!message) {
+          res.status(400).json({ error: 'Invalid message format' });
+          return;
+        }
+
+        // Process the message if needed
+        console.log('Received message:', message);
+        
+        // Emit the message to all connected SSE clients
+        this.eventEmitter.emit('message', message);
+        
+        // Send success response
+        res.status(200).json({ success: true });
+      } catch (error) {
+        console.error('Error processing message:', error);
+        res.status(500).json({ error: 'Internal server error' });
+      }
     });
   }
 
