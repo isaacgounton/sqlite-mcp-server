@@ -22,6 +22,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Enable interactive mode for stdio
 ENV NODE_ENV=production
+ENV PORT=3001
+EXPOSE 3001
 STOPSIGNAL SIGINT
 
 # Command to run the server

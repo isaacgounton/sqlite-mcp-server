@@ -23,7 +23,7 @@ npm start
 ```bash
 # Build and run with Docker
 docker build -t sqlite-mcp-server .
-docker run -p 3001:3001 -d --name sqlite-mcp sqlite-mcp-server
+docker run -d --name sqlite-mcp sqlite-mcp-server
 ```
 
 ## Available Tools
