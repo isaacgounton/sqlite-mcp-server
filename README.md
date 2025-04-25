@@ -1,4 +1,5 @@
 # SQLite MCP Server
+[![smithery badge](https://smithery.ai/badge/@isaacgounton/sqlite-mcp-server)](https://smithery.ai/server/@isaacgounton/sqlite-mcp-server)
 
 A Model Context Protocol (MCP) server that provides SQLite database operations through a standardized interface.
 
