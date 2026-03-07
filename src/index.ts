@@ -15,7 +15,8 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import Database from 'better-sqlite3';
+import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 // --- Configuration ---
 const args = process.argv.slice(2);
@@ -73,23 +74,56 @@ function queryHasMultipleStatements(query: string): boolean {
 
 // --- Shared database wrapper ---
 class DatabaseWrapper {
-  private db: Database.Database;
+  private db: SqlJsDatabase;
+  private filePath: string | null;
 
-  constructor(path: string) {
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('foreign_keys = ON');
+  private constructor(db: SqlJsDatabase, filePath: string | null) {
+    this.db = db;
+    this.filePath = filePath;
+    this.db.run('PRAGMA foreign_keys = ON');
   }
 
-  all(sql: string): unknown[] {
-    return this.db.prepare(sql).all();
+  static async create(path: string): Promise<DatabaseWrapper> {
+    const SQL = await initSqlJs();
+    let db: SqlJsDatabase;
+    const filePath = path === ':memory:' ? null : path;
+
+    if (filePath && existsSync(filePath)) {
+      const buffer = readFileSync(filePath);
+      db = new SQL.Database(buffer);
+    } else {
+      db = new SQL.Database();
+    }
+
+    return new DatabaseWrapper(db, filePath);
+  }
+
+  all(sql: string): Record<string, unknown>[] {
+    const stmt = this.db.prepare(sql);
+    const rows: Record<string, unknown>[] = [];
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject() as Record<string, unknown>);
+    }
+    stmt.free();
+    return rows;
   }
 
   run(sql: string): { changes: number } {
-    return this.db.prepare(sql).run();
+    this.db.run(sql);
+    const changes = this.db.getRowsModified();
+    this.persist();
+    return { changes };
+  }
+
+  private persist(): void {
+    if (this.filePath) {
+      const data = this.db.export();
+      writeFileSync(this.filePath, Buffer.from(data));
+    }
   }
 
   close(): void {
+    this.persist();
     this.db.close();
   }
 }
@@ -451,7 +485,7 @@ async function startStdioTransport(db: DatabaseWrapper) {
 
 // --- Main ---
 async function main() {
-  const db = new DatabaseWrapper(dbPath);
+  const db = await DatabaseWrapper.create(dbPath);
 
   process.on('SIGINT', () => {
     db.close();
