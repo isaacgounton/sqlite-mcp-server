@@ -15,8 +15,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import sqlite3 from 'sqlite3';
-import { promisify } from 'util';
+import Database from 'better-sqlite3';
 
 // --- Configuration ---
 const args = process.argv.slice(2);
@@ -74,20 +73,20 @@ function queryHasMultipleStatements(query: string): boolean {
 
 // --- Shared database wrapper ---
 class DatabaseWrapper {
-  private db: sqlite3.Database;
+  private db: Database.Database;
 
   constructor(path: string) {
-    this.db = new sqlite3.Database(path);
-    this.db.run('PRAGMA journal_mode = WAL');
-    this.db.run('PRAGMA foreign_keys = ON');
+    this.db = new Database(path);
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('foreign_keys = ON');
   }
 
-  all(sql: string): Promise<unknown[]> {
-    return promisify(this.db.all.bind(this.db))(sql) as Promise<unknown[]>;
+  all(sql: string): unknown[] {
+    return this.db.prepare(sql).all();
   }
 
-  run(sql: string): Promise<{ changes?: number }> {
-    return promisify(this.db.run.bind(this.db))(sql) as Promise<{ changes?: number }>;
+  run(sql: string): { changes: number } {
+    return this.db.prepare(sql).run();
   }
 
   close(): void {
@@ -135,7 +134,7 @@ function createMcpServer(db: DatabaseWrapper): Server {
     const uri = request.params.uri;
 
     if (uri === `sqlite://${dbPath}/schema`) {
-      const tables = await db.all(
+      const tables = db.all(
         "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
       ) as { name: string; sql: string }[];
       return {
@@ -247,35 +246,35 @@ function createMcpServer(db: DatabaseWrapper): Server {
       case 'read_query': {
         const { query } = toolArgs as { query: string };
         validateReadQuery(query);
-        const rows = await db.all(query);
+        const rows = db.all(query);
         return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
       }
 
       case 'write_query': {
         const { query } = toolArgs as { query: string };
         validateWriteQuery(query);
-        const result = await db.run(query);
+        const result = db.run(query);
         return {
-          content: [{ type: 'text', text: JSON.stringify({ affected_rows: result.changes ?? 0 }, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify({ affected_rows: result.changes }, null, 2) }],
         };
       }
 
       case 'create_table': {
         const { query } = toolArgs as { query: string };
         validateCreateTableQuery(query);
-        await db.run(query);
+        db.run(query);
         return { content: [{ type: 'text', text: 'Table created successfully' }] };
       }
 
       case 'drop_table': {
         const { table_name } = toolArgs as { table_name: string };
         validateTableName(table_name);
-        await db.run(`DROP TABLE IF EXISTS "${table_name}"`);
+        db.run(`DROP TABLE IF EXISTS "${table_name}"`);
         return { content: [{ type: 'text', text: `Table "${table_name}" dropped successfully` }] };
       }
 
       case 'list_tables': {
-        const rows = await db.all(
+        const rows = db.all(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
         ) as { name: string }[];
         return {
@@ -286,9 +285,9 @@ function createMcpServer(db: DatabaseWrapper): Server {
       case 'describe_table': {
         const { table_name } = toolArgs as { table_name: string };
         validateTableName(table_name);
-        const columns = await db.all(`PRAGMA table_info("${table_name}")`);
-        const indexes = await db.all(`PRAGMA index_list("${table_name}")`);
-        const foreignKeys = await db.all(`PRAGMA foreign_key_list("${table_name}")`);
+        const columns = db.all(`PRAGMA table_info("${table_name}")`);
+        const indexes = db.all(`PRAGMA index_list("${table_name}")`);
+        const foreignKeys = db.all(`PRAGMA foreign_key_list("${table_name}")`);
         return {
           content: [{ type: 'text', text: JSON.stringify({ columns, indexes, foreign_keys: foreignKeys }, null, 2) }],
         };
