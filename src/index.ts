@@ -1,6 +1,10 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -13,413 +17,456 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import sqlite3 from 'sqlite3';
 import { promisify } from 'util';
-import express, { Request, Response } from 'express';
-import bodyParser from 'body-parser';
-import { EventEmitter } from 'events';
 
-const PROMPT_TEMPLATE = `
-Oh, Hey there! I see you've chosen the topic {topic}. Let's get started! 🚀
+// --- Configuration ---
+const args = process.argv.slice(2);
+const dbPath = process.env.SQLITE_DB_PATH || args.find(a => !a.startsWith('--')) || ':memory:';
+const transportMode = args.includes('--http') ? 'http' : 'stdio';
+const port = parseInt(process.env.PORT || '3000', 10);
 
-I'll help you create a comprehensive business scenario using our SQLite database. We'll:
-1. Set up relevant database tables
-2. Populate them with sample data
-3. Run some insightful queries
-4. Generate business insights
-5. Create a dashboard
-`;
+// --- Validation helpers ---
+const VALID_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-class SQLiteServer {
-  private server: Server;
-  private db: sqlite3.Database;
-  private insights: string[] = [];
-  private app: express.Application;
-  private eventEmitter = new EventEmitter();
-
-  constructor() {
-    this.server = new Server(
-      {
-        name: 'sqlite-server',
-        version: '0.1.0',
-      },
-      {
-        capabilities: {
-          resources: { listChanged: false },
-          tools: { listChanged: false },
-          prompts: { listChanged: false }
-        },
-      }
-    );
-
-    // Initialize SQLite database
-    this.db = new sqlite3.Database(':memory:');
-    this.setupResourceHandlers();
-    this.setupToolHandlers();
-    this.setupPromptHandlers();
-
-    // Initialize Express app
-    this.app = express();
-    
-    // Add CORS headers to allow cross-origin requests
-    this.app.use((req: Request, res: Response, next) => {
-      res.header('Access-Control-Allow-Origin', '*');
-      res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      if (req.method === 'OPTIONS') {
-        res.sendStatus(200);
-      } else {
-        next();
-      }
-    });
-    
-    this.app.use(bodyParser.json());
-    this.setupExpressHandlers();
-
-    // Error handling
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
-    process.on('SIGINT', async () => {
-      await this.server.close();
-      this.db.close();
-      process.exit(0);
-    });
-  }
-
-  private setupPromptHandlers() {
-    this.server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-      prompts: [
-        {
-          name: 'mcp-demo',
-          description: 'A prompt to demonstrate SQLite MCP Server capabilities',
-          arguments: [
-            {
-              name: 'topic',
-              description: 'Topic to seed the database with initial data',
-              required: true
-            }
-          ]
-        }
-      ]
-    }));
-
-    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-      if (request.params.name !== 'mcp-demo') {
-        throw new McpError(ErrorCode.InvalidRequest, 'Unknown prompt');
-      }
-
-      if (!request.params.arguments?.topic) {
-        throw new McpError(ErrorCode.InvalidRequest, 'Missing required argument: topic');
-      }
-
-      const prompt = PROMPT_TEMPLATE.replace('{topic}', request.params.arguments.topic);
-
-      return {
-        description: `Demo template for ${request.params.arguments.topic}`,
-        messages: [
-          {
-            role: 'user',
-            content: [{ type: 'text', text: prompt.trim() }]
-          }
-        ]
-      };
-    });
-  }
-
-  private setupResourceHandlers() {
-    // List available resources
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: [
-        {
-          uri: 'memo://insights',
-          name: 'Business Insights Memo',
-          description: 'Continuously updated business insights memo',
-          mimeType: 'text/plain',
-        },
-      ],
-    }));
-
-    // Handle resource reading
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      if (request.params.uri !== 'memo://insights') {
-          throw new McpError(ErrorCode.InvalidRequest, 'Resource not found');
-      }
-
-      return {
-        contents: [
-          {
-            uri: request.params.uri,
-            mimeType: 'text/plain',
-            text: this.insights.join('\n\n'),
-          },
-        ],
-      };
-    });
-  }
-
-  private setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
-        {
-          name: 'read_query',
-          description: 'Execute a SELECT query',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'The SELECT SQL query to execute',
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'write_query',
-          description: 'Execute an INSERT, UPDATE, or DELETE query',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'The SQL modification query',
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'create_table',
-          description: 'Create a new table',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: {
-                type: 'string',
-                description: 'CREATE TABLE SQL statement',
-              },
-            },
-            required: ['query'],
-          },
-        },
-        {
-          name: 'list_tables',
-          description: 'List all tables in the database',
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'describe_table',
-          description: 'View schema information for a table',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              table_name: {
-                type: 'string',
-                description: 'Name of table to describe',
-              },
-            },
-            required: ['table_name'],
-          },
-        },
-        {
-          name: 'append_insight',
-          description: 'Add a new business insight to the memo',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              insight: {
-                type: 'string',
-                description: 'Business insight discovered from data analysis',
-              },
-            },
-            required: ['insight'],
-          },
-        },
-      ],
-    }));
-
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      switch (request.params.name) {
-        case 'read_query': {
-          const { query } = request.params.arguments as { query: string };
-          if (!query.toLowerCase().trim().startsWith('select')) {
-            throw new McpError(ErrorCode.InvalidParams, 'Only SELECT queries are allowed');
-          }
-          const result = await promisify(this.db.all.bind(this.db))(query);
-          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
-        }
-
-        case 'write_query': {
-          const { query } = request.params.arguments as { query: string };
-          const result = await promisify(this.db.run.bind(this.db))(query) as { changes?: number };
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ affected_rows: result.changes }, null, 2),
-              },
-            ],
-          };
-        }
-
-        case 'create_table': {
-          const { query } = request.params.arguments as { query: string };
-          if (!query.toLowerCase().trim().startsWith('create table')) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
-              'Query must be a CREATE TABLE statement'
-            );
-          }
-          await promisify(this.db.run.bind(this.db))(query);
-          return {
-            content: [{ type: 'text', text: 'Table created successfully' }],
-          };
-        }
-
-        case 'list_tables': {
-          const result = await promisify(this.db.all.bind(this.db))(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-          ) as { name: string }[];
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result.map((r: { name: string }) => r.name), null, 2),
-              },
-            ],
-          };
-        }
-
-        case 'describe_table': {
-          const { table_name } = request.params.arguments as { table_name: string };
-          const result = await promisify(this.db.all.bind(this.db))(
-            `PRAGMA table_info(${table_name})`
-          );
-          return {
-            content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-          };
-        }
-
-        case 'append_insight': {
-          const { insight } = request.params.arguments as { insight: string };
-          this.insights.push(insight);
-          return {
-            content: [{ type: 'text', text: 'Insight added successfully' }],
-          };
-        }
-
-        default:
-          throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${request.params.name}`
-          );
-      }
-    });
-  }
-
-  private setupExpressHandlers() {
-    // Add a health check endpoint
-    this.app.get('/health', (req: Request, res: Response) => {
-      res.status(200).send('OK');
-    });
-
-    // You may also want to add a root endpoint for the main health check
-    this.app.get('/', (req: Request, res: Response) => {
-      res.status(200).send('SQLite MCP Server is running');
-    });
-
-    // Add SSE endpoint
-    this.app.get('/sse', (req: Request, res: Response) => {
-      console.log('New SSE connection established');
-      
-      // Set headers for SSE
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
-
-      // Send initial ping to establish connection
-      res.write('event: ping\ndata: connected\n\n');
-
-      // Create event listener for this client
-      const messageListener = (message: any) => {
-        // Only log non-test messages to avoid log spam
-        if (!message.type || message.type !== 'connection_test') {
-          console.log('Broadcasting message to client:', message);
-        }
-        res.write(`data: ${JSON.stringify(message)}\n\n`);
-      };
-
-      // Register client
-      this.eventEmitter.on('message', messageListener);
-
-      // We're removing the test message to avoid log spam
-      // Instead, only send a test message once when the server starts
-
-      // Handle client disconnect
-      req.on('close', () => {
-        console.log('SSE connection closed');
-        this.eventEmitter.off('message', messageListener);
-      });
-    });
-
-    // Add GET handler for messages endpoint
-    this.app.get('/messages', (req: Request, res: Response) => {
-      res.status(200).json({ 
-        message: 'This endpoint only accepts POST requests for MCP protocol messages',
-        usage: 'Send POST requests to this endpoint with JSON message body'
-      });
-    });
-
-    // Add messages endpoint
-    this.app.post('/messages', (req: Request, res: Response) => {
-      try {
-        const message = req.body;
-        
-        // Log the request details
-        console.log('Received message POST:', JSON.stringify(message));
-        
-        // Validate message format if needed
-        if (!message) {
-          console.error('Invalid message format:', req.body);
-          res.status(400).json({ error: 'Invalid message format' });
-          return;
-        }
-
-        // Emit the message to all connected SSE clients
-        this.eventEmitter.emit('message', message);
-        
-        // Send success response
-        res.status(200).json({ success: true });
-      } catch (error) {
-        console.error('Error processing message:', error);
-        res.status(500).json({ error: 'Internal server error' });
-      }
-    });
-  }
-
-  async run() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-    console.error('SQLite MCP server running on stdio');
-
-    // Start the Express server
-    this.app.listen(3000, () => {
-      console.log('Express server running on port 3000');
-      console.log('SSE endpoint available at http://localhost:3000/sse');
-      console.log('Messages endpoint available at http://localhost:3000/messages');
-      
-      // Send a single test message when the server starts to verify everything is working
-      // This will only be logged once
-      setTimeout(() => {
-        this.eventEmitter.emit('message', { 
-          type: 'server_started', 
-          message: 'SQLite MCP server is ready to accept connections' 
-        });
-      }, 1000);
-    });
+function validateTableName(name: string): void {
+  if (!VALID_IDENTIFIER.test(name)) {
+    throw new McpError(ErrorCode.InvalidParams, `Invalid table name: "${name}". Use only letters, numbers, and underscores.`);
   }
 }
 
-const server = new SQLiteServer();
-server.run().catch(console.error);
+function validateReadQuery(query: string): void {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized.startsWith('select') && !normalized.startsWith('with') && !normalized.startsWith('explain')) {
+    throw new McpError(ErrorCode.InvalidParams, 'Only SELECT, WITH (CTE), and EXPLAIN queries are allowed for read_query');
+  }
+  if (queryHasMultipleStatements(query)) {
+    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
+  }
+}
+
+function validateWriteQuery(query: string): void {
+  const normalized = query.trim().toLowerCase();
+  const allowed = ['insert', 'update', 'delete', 'replace'];
+  if (!allowed.some(prefix => normalized.startsWith(prefix))) {
+    throw new McpError(ErrorCode.InvalidParams, 'Only INSERT, UPDATE, DELETE, and REPLACE queries are allowed for write_query');
+  }
+  if (queryHasMultipleStatements(query)) {
+    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
+  }
+}
+
+function validateCreateTableQuery(query: string): void {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized.startsWith('create table')) {
+    throw new McpError(ErrorCode.InvalidParams, 'Query must be a CREATE TABLE statement');
+  }
+}
+
+function queryHasMultipleStatements(query: string): boolean {
+  const stripped = query
+    .replace(/'[^']*'/g, '')           // remove single-quoted strings
+    .replace(/"[^"]*"/g, '')           // remove double-quoted identifiers
+    .replace(/--[^\n]*/g, '')          // remove line comments
+    .replace(/\/\*[\s\S]*?\*\//g, '')  // remove block comments
+    .trim()
+    .replace(/;$/, '');                // remove trailing semicolon
+  return stripped.includes(';');
+}
+
+// --- Shared database wrapper ---
+class DatabaseWrapper {
+  private db: sqlite3.Database;
+
+  constructor(path: string) {
+    this.db = new sqlite3.Database(path);
+    this.db.run('PRAGMA journal_mode = WAL');
+    this.db.run('PRAGMA foreign_keys = ON');
+  }
+
+  all(sql: string): Promise<unknown[]> {
+    return promisify(this.db.all.bind(this.db))(sql) as Promise<unknown[]>;
+  }
+
+  run(sql: string): Promise<{ changes?: number }> {
+    return promisify(this.db.run.bind(this.db))(sql) as Promise<{ changes?: number }>;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+// --- Shared insights store ---
+const insights: string[] = [];
+
+// --- Server factory ---
+function createMcpServer(db: DatabaseWrapper): Server {
+  const server = new Server(
+    { name: 'sqlite-manager', version: '1.0.0' },
+    {
+      capabilities: {
+        resources: {},
+        tools: {},
+        prompts: {},
+      },
+    }
+  );
+
+  server.onerror = (error) => console.error('[MCP Error]', error);
+
+  // ── Resources ──
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: [
+      {
+        uri: `sqlite://${dbPath}/schema`,
+        name: 'Database Schema',
+        description: 'Complete schema of all tables in the SQLite database',
+        mimeType: 'application/json',
+      },
+      {
+        uri: 'memo://insights',
+        name: 'Business Insights Memo',
+        description: 'Accumulated business insights from data analysis',
+        mimeType: 'text/plain',
+      },
+    ],
+  }));
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const uri = request.params.uri;
+
+    if (uri === `sqlite://${dbPath}/schema`) {
+      const tables = await db.all(
+        "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+      ) as { name: string; sql: string }[];
+      return {
+        contents: [{
+          uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(tables, null, 2),
+        }],
+      };
+    }
+
+    if (uri === 'memo://insights') {
+      return {
+        contents: [{
+          uri,
+          mimeType: 'text/plain',
+          text: insights.length > 0 ? insights.join('\n\n') : 'No insights yet.',
+        }],
+      };
+    }
+
+    throw new McpError(ErrorCode.InvalidRequest, `Resource not found: ${uri}`);
+  });
+
+  // ── Tools ──
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: [
+      {
+        name: 'read_query',
+        description: 'Execute a read-only SQL query (SELECT, WITH/CTE, or EXPLAIN). Use this for fetching data.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            query: { type: 'string', description: 'The SELECT SQL query to execute' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'write_query',
+        description: 'Execute a data modification query (INSERT, UPDATE, DELETE, REPLACE). Returns affected row count.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            query: { type: 'string', description: 'The SQL modification query to execute' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'create_table',
+        description: 'Create a new table in the database with a full CREATE TABLE SQL statement.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            query: { type: 'string', description: 'CREATE TABLE SQL statement' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'drop_table',
+        description: 'Drop (delete) a table from the database. This action is irreversible.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            table_name: { type: 'string', description: 'Name of the table to drop' },
+          },
+          required: ['table_name'],
+        },
+      },
+      {
+        name: 'list_tables',
+        description: 'List all user-created tables in the database.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {},
+        },
+      },
+      {
+        name: 'describe_table',
+        description: 'Get the schema of a table: columns, types, constraints, indexes, and foreign keys.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            table_name: { type: 'string', description: 'Name of the table to describe' },
+          },
+          required: ['table_name'],
+        },
+      },
+      {
+        name: 'append_insight',
+        description: 'Add a business insight to the insights memo resource. Useful for recording observations from analysis.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            insight: { type: 'string', description: 'The business insight to record' },
+          },
+          required: ['insight'],
+        },
+      },
+    ],
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: toolArgs } = request.params;
+
+    switch (name) {
+      case 'read_query': {
+        const { query } = toolArgs as { query: string };
+        validateReadQuery(query);
+        const rows = await db.all(query);
+        return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] };
+      }
+
+      case 'write_query': {
+        const { query } = toolArgs as { query: string };
+        validateWriteQuery(query);
+        const result = await db.run(query);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ affected_rows: result.changes ?? 0 }, null, 2) }],
+        };
+      }
+
+      case 'create_table': {
+        const { query } = toolArgs as { query: string };
+        validateCreateTableQuery(query);
+        await db.run(query);
+        return { content: [{ type: 'text', text: 'Table created successfully' }] };
+      }
+
+      case 'drop_table': {
+        const { table_name } = toolArgs as { table_name: string };
+        validateTableName(table_name);
+        await db.run(`DROP TABLE IF EXISTS "${table_name}"`);
+        return { content: [{ type: 'text', text: `Table "${table_name}" dropped successfully` }] };
+      }
+
+      case 'list_tables': {
+        const rows = await db.all(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ) as { name: string }[];
+        return {
+          content: [{ type: 'text', text: JSON.stringify(rows.map(r => r.name), null, 2) }],
+        };
+      }
+
+      case 'describe_table': {
+        const { table_name } = toolArgs as { table_name: string };
+        validateTableName(table_name);
+        const columns = await db.all(`PRAGMA table_info("${table_name}")`);
+        const indexes = await db.all(`PRAGMA index_list("${table_name}")`);
+        const foreignKeys = await db.all(`PRAGMA foreign_key_list("${table_name}")`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ columns, indexes, foreign_keys: foreignKeys }, null, 2) }],
+        };
+      }
+
+      case 'append_insight': {
+        const { insight } = toolArgs as { insight: string };
+        insights.push(insight);
+        return { content: [{ type: 'text', text: `Insight added (total: ${insights.length})` }] };
+      }
+
+      default:
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+    }
+  });
+
+  // ── Prompts ──
+  server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+    prompts: [
+      {
+        name: 'mcp-demo',
+        description: 'A guided walkthrough that creates tables, inserts sample data, and runs queries for a given topic',
+        arguments: [
+          {
+            name: 'topic',
+            description: 'Business domain to create sample data for (e.g., "e-commerce", "inventory", "HR")',
+            required: true,
+          },
+        ],
+      },
+    ],
+  }));
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    if (request.params.name !== 'mcp-demo') {
+      throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${request.params.name}`);
+    }
+    const topic = request.params.arguments?.topic;
+    if (!topic) {
+      throw new McpError(ErrorCode.InvalidRequest, 'Missing required argument: topic');
+    }
+
+    return {
+      description: `Demo template for ${topic}`,
+      messages: [
+        {
+          role: 'user' as const,
+          content: {
+            type: 'text' as const,
+            text: [
+              `Topic: ${topic}`,
+              '',
+              'Using the SQLite MCP server, please:',
+              '1. Create relevant database tables for this topic with appropriate schemas',
+              '2. Insert realistic sample data (at least 10 rows per table)',
+              '3. Run analytical queries to extract insights',
+              '4. Use append_insight to record each finding',
+              '5. Summarize the insights at the end',
+            ].join('\n'),
+          },
+        },
+      ],
+    };
+  });
+
+  return server;
+}
+
+// --- Transport: Streamable HTTP ---
+async function startHttpTransport(db: DatabaseWrapper) {
+  const app = createMcpExpressApp();
+
+  const transports = new Map<string, StreamableHTTPServerTransport>();
+
+  // Health check
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', db: dbPath, sessions: transports.size });
+  });
+
+  // Streamable HTTP endpoint - handles POST (messages) and GET (SSE stream)
+  app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+
+    // Existing session — route to its transport
+    if (sessionId && transports.has(sessionId)) {
+      const transport = transports.get(sessionId)!;
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // New session — only allow initialize requests
+    if (!sessionId && isInitializeRequest(req.body)) {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          transports.set(id, transport);
+          console.error(`Session initialized: ${id}`);
+        },
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          transports.delete(transport.sessionId);
+          console.error(`Session closed: ${transport.sessionId}`);
+        }
+      };
+
+      const server = createMcpServer(db);
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    // Invalid request
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Invalid request: bad session ID or not an initialize request' },
+      id: null,
+    });
+  });
+
+  // GET for SSE stream (session resumability)
+  app.get('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    const transport = transports.get(sessionId);
+    if (transport) {
+      await transport.handleRequest(req, res);
+    } else {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+  });
+
+  // DELETE for session termination
+  app.delete('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'] as string;
+    const transport = transports.get(sessionId);
+    if (transport) {
+      await transport.close();
+      transports.delete(sessionId);
+      res.status(200).json({ message: 'Session terminated' });
+    } else {
+      res.status(400).json({ error: 'Invalid or missing session ID' });
+    }
+  });
+
+  app.listen(port, () => {
+    console.error(`SQLite MCP server (Streamable HTTP) listening on port ${port}`);
+    console.error(`  Database: ${dbPath}`);
+    console.error(`  Endpoint: http://localhost:${port}/mcp`);
+    console.error(`  Health:   http://localhost:${port}/health`);
+  });
+}
+
+// --- Transport: Stdio ---
+async function startStdioTransport(db: DatabaseWrapper) {
+  const server = createMcpServer(db);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error(`SQLite MCP server running on stdio (db: ${dbPath})`);
+}
+
+// --- Main ---
+async function main() {
+  const db = new DatabaseWrapper(dbPath);
+
+  process.on('SIGINT', () => {
+    db.close();
+    process.exit(0);
+  });
+
+  if (transportMode === 'http') {
+    await startHttpTransport(db);
+  } else {
+    await startStdioTransport(db);
+  }
+}
+
+main().catch((error) => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
