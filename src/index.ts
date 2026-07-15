@@ -59,6 +59,9 @@ function validateCreateTableQuery(query: string): void {
   if (!normalized.startsWith('create table')) {
     throw new McpError(ErrorCode.InvalidParams, 'Query must be a CREATE TABLE statement');
   }
+  if (queryHasMultipleStatements(query)) {
+    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
+  }
 }
 
 function queryHasMultipleStatements(query: string): boolean {
