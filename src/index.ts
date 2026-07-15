@@ -17,63 +17,21 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  validateTableName,
+  validateReadQuery,
+  validateWriteQuery,
+  validateCreateTableQuery,
+} from './validators.js';
 
 // --- Configuration ---
 const args = process.argv.slice(2);
 const dbPath = process.env.SQLITE_DB_PATH || args.find(a => !a.startsWith('--')) || ':memory:';
 const transportMode = args.includes('--http') ? 'http' : 'stdio';
 const port = parseInt(process.env.PORT || '3000', 10);
-
-// --- Validation helpers ---
-const VALID_IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-function validateTableName(name: string): void {
-  if (!VALID_IDENTIFIER.test(name)) {
-    throw new McpError(ErrorCode.InvalidParams, `Invalid table name: "${name}". Use only letters, numbers, and underscores.`);
-  }
-}
-
-function validateReadQuery(query: string): void {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized.startsWith('select') && !normalized.startsWith('with') && !normalized.startsWith('explain')) {
-    throw new McpError(ErrorCode.InvalidParams, 'Only SELECT, WITH (CTE), and EXPLAIN queries are allowed for read_query');
-  }
-  if (queryHasMultipleStatements(query)) {
-    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
-  }
-}
-
-function validateWriteQuery(query: string): void {
-  const normalized = query.trim().toLowerCase();
-  const allowed = ['insert', 'update', 'delete', 'replace'];
-  if (!allowed.some(prefix => normalized.startsWith(prefix))) {
-    throw new McpError(ErrorCode.InvalidParams, 'Only INSERT, UPDATE, DELETE, and REPLACE queries are allowed for write_query');
-  }
-  if (queryHasMultipleStatements(query)) {
-    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
-  }
-}
-
-function validateCreateTableQuery(query: string): void {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized.startsWith('create table')) {
-    throw new McpError(ErrorCode.InvalidParams, 'Query must be a CREATE TABLE statement');
-  }
-  if (queryHasMultipleStatements(query)) {
-    throw new McpError(ErrorCode.InvalidParams, 'Multiple statements are not allowed');
-  }
-}
-
-function queryHasMultipleStatements(query: string): boolean {
-  const stripped = query
-    .replace(/'[^']*'/g, '')           // remove single-quoted strings
-    .replace(/"[^"]*"/g, '')           // remove double-quoted identifiers
-    .replace(/--[^\n]*/g, '')          // remove line comments
-    .replace(/\/\*[\s\S]*?\*\//g, '')  // remove block comments
-    .trim()
-    .replace(/;$/, '');                // remove trailing semicolon
-  return stripped.includes(';');
-}
+const host = process.env.HOST || '127.0.0.1';
+const allowedHosts = (process.env.MCP_ALLOWED_HOSTS || `localhost:${port},127.0.0.1:${port}`)
+  .split(',').map(h => h.trim()).filter(Boolean);
 
 // --- Shared database wrapper ---
 class DatabaseWrapper {
@@ -419,6 +377,8 @@ async function startHttpTransport(db: DatabaseWrapper) {
     if (!sessionId && isInitializeRequest(req.body)) {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
+        enableDnsRebindingProtection: true,
+        allowedHosts,
         onsessioninitialized: (id) => {
           transports.set(id, transport);
           console.error(`Session initialized: ${id}`);
@@ -470,11 +430,14 @@ async function startHttpTransport(db: DatabaseWrapper) {
     }
   });
 
-  app.listen(port, () => {
-    console.error(`SQLite MCP server (Streamable HTTP) listening on port ${port}`);
+  app.listen(port, host, () => {
+    console.error(`SQLite MCP server (Streamable HTTP) listening on ${host}:${port}`);
     console.error(`  Database: ${dbPath}`);
-    console.error(`  Endpoint: http://localhost:${port}/mcp`);
-    console.error(`  Health:   http://localhost:${port}/health`);
+    console.error(`  Endpoint: http://${host}:${port}/mcp`);
+    console.error(`  Health:   http://${host}:${port}/health`);
+    if (host !== '127.0.0.1' && host !== 'localhost') {
+      console.error(`  WARNING: bound to ${host} with no auth — put a reverse proxy in front. See SECURITY.md`);
+    }
   });
 }
 

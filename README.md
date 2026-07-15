@@ -1,5 +1,7 @@
 # SQLite MCP Server
 
+[![CI](https://github.com/isaacgounton/sqlite-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/isaacgounton/sqlite-mcp-server/actions/workflows/ci.yml)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 [![smithery badge](https://smithery.ai/badge/@isaacgounton/sqlite-mcp-server)](https://smithery.ai/server/@isaacgounton/sqlite-mcp-server)
 
 A Model Context Protocol (MCP) server that provides SQLite database operations. Supports both **stdio** (for Claude Desktop, Cursor, etc.) and **Streamable HTTP** (for remote clients) transports.
@@ -55,14 +57,16 @@ With a file-based database:
 node build/index.js --http
 ```
 
-The server exposes a single endpoint at `http://localhost:3000/mcp` following the MCP Streamable HTTP specification.
+The server exposes a single endpoint at `http://localhost:3000/mcp` following the MCP Streamable HTTP specification. By default it binds to `127.0.0.1`. To reach it from another host or a container, set `HOST=0.0.0.0` — but read the [Security](#security) section first: the HTTP transport has no authentication.
 
 ### Docker
 
 ```bash
 docker build -t sqlite-mcp-server .
-docker run -d -p 3000:3000 --name sqlite-mcp sqlite-mcp-server
+docker run -d -p 3000:3000 -e HOST=0.0.0.0 --name sqlite-mcp sqlite-mcp-server
 ```
+
+`HOST=0.0.0.0` is required so the server is reachable through the published port. Connecting from the host via `localhost:3000` works out of the box; to reach it under any other hostname, add that host to `MCP_ALLOWED_HOSTS`.
 
 ## Configuration
 
@@ -72,6 +76,8 @@ docker run -d -p 3000:3000 --name sqlite-mcp sqlite-mcp-server
 | First non-flag argument | Path to SQLite database file | `:memory:` |
 | `SQLITE_DB_PATH` | Database path (env var alternative) | `:memory:` |
 | `PORT` | HTTP server port (HTTP mode only) | `3000` |
+| `HOST` | Interface to bind in HTTP mode. Use `0.0.0.0` to expose beyond localhost | `127.0.0.1` |
+| `MCP_ALLOWED_HOSTS` | Comma-separated `Host` header allow-list for DNS-rebinding protection | `localhost:$PORT,127.0.0.1:$PORT` |
 
 Examples:
 
@@ -130,16 +136,19 @@ Sessions are managed via the `Mcp-Session-Id` header.
 ## Security
 
 - Query validation: each tool only accepts its intended SQL statement type
-- Multi-statement injection blocked (semicolons within queries are rejected)
+- Multi-statement injection blocked: stacked statements are rejected, with string literals and comments stripped before the check
 - Table names validated against `^[a-zA-Z_][a-zA-Z0-9_]*$`
-- WAL mode and foreign keys enabled by default
-- DNS rebinding protection on HTTP transport
+- Foreign keys enabled by default
+- HTTP transport binds to `127.0.0.1` by default, with DNS-rebinding protection (`MCP_ALLOWED_HOSTS`)
+
+**The HTTP transport has no authentication.** If you expose it beyond localhost, put it behind a reverse proxy that enforces auth. See [SECURITY.md](SECURITY.md) for the full model and how to report a vulnerability.
 
 ## Development
 
 ```bash
 npm install
 npm run build
+npm test           # build + run the validator test suite
 npm start          # stdio mode
 npm run start:http # HTTP mode
 ```
