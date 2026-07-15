@@ -97,7 +97,7 @@ const insights: string[] = [];
 // --- Server factory ---
 function createMcpServer(db: DatabaseWrapper): Server {
   const server = new Server(
-    { name: 'sqlite-manager', version: '1.0.0' },
+    { name: 'sqlite-manager', version: '1.1.0' },
     {
       capabilities: {
         resources: {},
