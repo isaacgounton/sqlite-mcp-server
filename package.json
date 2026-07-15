@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "tsc && node --test build/validators.test.js",
+    "test": "tsc && node --test build/validators.test.js build/auth.test.js",
     "start": "node build/index.js",
     "start:http": "node build/index.js --http"
   },

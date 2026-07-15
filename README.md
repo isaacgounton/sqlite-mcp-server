@@ -78,6 +78,7 @@ docker run -d -p 3000:3000 -e HOST=0.0.0.0 --name sqlite-mcp sqlite-mcp-server
 | `PORT` | HTTP server port (HTTP mode only) | `3000` |
 | `HOST` | Interface to bind in HTTP mode. Use `0.0.0.0` to expose beyond localhost | `127.0.0.1` |
 | `MCP_ALLOWED_HOSTS` | Comma-separated `Host` header allow-list for DNS-rebinding protection | `localhost:$PORT,127.0.0.1:$PORT` |
+| `MCP_AUTH_TOKEN` | Bearer token required on all `/mcp` requests (HTTP mode). Unset = auth disabled | _(none)_ |
 
 Examples:
 
@@ -133,6 +134,16 @@ Connect any MCP-compatible client to `http://your-host:3000/mcp`. The server sup
 
 Sessions are managed via the `Mcp-Session-Id` header.
 
+### Authentication
+
+Set `MCP_AUTH_TOKEN` to require a bearer token on every `/mcp` request (`/health` stays open):
+
+```bash
+MCP_AUTH_TOKEN=$(openssl rand -hex 32) HOST=0.0.0.0 node build/index.js --http
+```
+
+Clients then send `Authorization: Bearer <token>`. When `MCP_AUTH_TOKEN` is unset, authentication is disabled — fine for a localhost-only bind, but do not expose the server publicly without it.
+
 ## Security
 
 - Query validation: each tool only accepts its intended SQL statement type
@@ -140,8 +151,9 @@ Sessions are managed via the `Mcp-Session-Id` header.
 - Table names validated against `^[a-zA-Z_][a-zA-Z0-9_]*$`
 - Foreign keys enabled by default
 - HTTP transport binds to `127.0.0.1` by default, with DNS-rebinding protection (`MCP_ALLOWED_HOSTS`)
+- Optional bearer-token auth on the HTTP transport via `MCP_AUTH_TOKEN` (timing-safe check)
 
-**The HTTP transport has no authentication.** If you expose it beyond localhost, put it behind a reverse proxy that enforces auth. See [SECURITY.md](SECURITY.md) for the full model and how to report a vulnerability.
+**Set `MCP_AUTH_TOKEN` before exposing the HTTP transport beyond localhost.** For production, also front it with a reverse proxy that terminates TLS. See [SECURITY.md](SECURITY.md) for the full model and how to report a vulnerability.
 
 ## Development
 

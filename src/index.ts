@@ -23,6 +23,7 @@ import {
   validateWriteQuery,
   validateCreateTableQuery,
 } from './validators.js';
+import { bearerAuth } from './auth.js';
 
 // --- Configuration ---
 const args = process.argv.slice(2);
@@ -32,6 +33,7 @@ const port = parseInt(process.env.PORT || '3000', 10);
 const host = process.env.HOST || '127.0.0.1';
 const allowedHosts = (process.env.MCP_ALLOWED_HOSTS || `localhost:${port},127.0.0.1:${port}`)
   .split(',').map(h => h.trim()).filter(Boolean);
+const authToken = process.env.MCP_AUTH_TOKEN;
 
 // --- Shared database wrapper ---
 class DatabaseWrapper {
@@ -357,10 +359,13 @@ async function startHttpTransport(db: DatabaseWrapper) {
 
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
-  // Health check
+  // Health check (unauthenticated, for load balancers)
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', db: dbPath, sessions: transports.size });
   });
+
+  // Bearer-token auth on all /mcp routes (no-op when MCP_AUTH_TOKEN is unset)
+  app.use('/mcp', bearerAuth(authToken));
 
   // Streamable HTTP endpoint - handles POST (messages) and GET (SSE stream)
   app.post('/mcp', async (req, res) => {
@@ -435,8 +440,9 @@ async function startHttpTransport(db: DatabaseWrapper) {
     console.error(`  Database: ${dbPath}`);
     console.error(`  Endpoint: http://${host}:${port}/mcp`);
     console.error(`  Health:   http://${host}:${port}/health`);
-    if (host !== '127.0.0.1' && host !== 'localhost') {
-      console.error(`  WARNING: bound to ${host} with no auth — put a reverse proxy in front. See SECURITY.md`);
+    console.error(`  Auth:     ${authToken ? 'bearer token required' : 'DISABLED (set MCP_AUTH_TOKEN)'}`);
+    if (!authToken && host !== '127.0.0.1' && host !== 'localhost') {
+      console.error(`  WARNING: bound to ${host} with NO auth — set MCP_AUTH_TOKEN and/or front it with an authenticating proxy. See SECURITY.md`);
     }
   });
 }

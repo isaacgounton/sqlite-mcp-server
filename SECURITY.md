@@ -21,11 +21,12 @@ These are validated by the test suite (`npm test`).
 
 ### HTTP transport
 
-The Streamable HTTP transport (`--http`) has **no authentication**. Anyone who can reach the endpoint can run every tool against the database. Mitigations in place and expected:
+The Streamable HTTP transport (`--http`) exposes every tool over the network. Anyone who can reach the endpoint and pass authentication can run SQL against the database. Mitigations in place and expected:
 
-- The server binds to `127.0.0.1` by default. Set `HOST=0.0.0.0` only when you intend to expose it.
+- **Bearer-token auth.** Set `MCP_AUTH_TOKEN` to require `Authorization: Bearer <token>` on all `/mcp` requests. The token is compared in constant time. Auth is **disabled** when the variable is unset — acceptable only for a localhost-only bind.
+- The server binds to `127.0.0.1` by default. Set `HOST=0.0.0.0` only when you intend to expose it, and set `MCP_AUTH_TOKEN` when you do.
 - DNS-rebinding protection is on; requests are checked against `MCP_ALLOWED_HOSTS` (defaults to localhost).
-- **If you expose it beyond localhost, put it behind a reverse proxy that terminates TLS and enforces authentication.** Do not expose the raw port to an untrusted network.
+- For production, also front it with a reverse proxy that terminates TLS. Do not expose the raw port to an untrusted network.
 
 ## Scope
 
